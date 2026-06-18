@@ -101,6 +101,8 @@ class OrToolsSolver:
                 self.problem, self.solver, self.forest_vars, self.peer_vars
             )
             best_analysis = best_model.analyze()
+            if isinstance(best_analysis, dict):
+                best_analysis["solver_status"] = status_str
         else:
             print(f"Or-Tools Solver status: {self.solver.StatusName(status)}")
             print("--- No solution found (INFEASIBLE or TIMEOUT) ---")
@@ -189,7 +191,7 @@ class OrToolsSolver:
                     self.model.NewIntVar(0, p_val, f"ratio_{name}_r{t}")
                     for t in range(self.problem.num_reagents)
                 ],
-                "total_input_var": self.model.NewIntVar(0, 2, f"TotalInput_{name}"),
+                "total_input_var": self.model.NewIntVar(0, 10, f"TotalInput_{name}"),
                 "is_active_var": self.model.NewBoolVar(f"IsActive_{name}"),
                 "waste_var": self.model.NewIntVar(0, 2, f"waste_{name}"),
                 "incoming_bools": {}
@@ -233,9 +235,12 @@ class OrToolsSolver:
                     node_vars["coef_g"] = z3_peer_node["coef_g"]
                     node_vars["ratio_a"] = z3_peer_node.get("ratio_a", 1)
                     node_vars["ratio_b"] = z3_peer_node.get("ratio_b", 1)
+                # 体積比 a:b に応じた入力量の上限。異重きは ratio_a/ratio_b、等重きは1。
+                _ra = z3_peer_node.get("ratio_a", 1) if node_vars["is_hetero"] else 1
+                _rb = z3_peer_node.get("ratio_b", 1) if node_vars["is_hetero"] else 1
                 node_vars["input_vars"] = {
-                    "from_a": self.model.NewIntVar(0, 1, f"share_peer_a_to_{name}"),
-                    "from_b": self.model.NewIntVar(0, 1, f"share_peer_b_to_{name}"),
+                    "from_a": self.model.NewIntVar(0, _ra, f"share_peer_a_to_{name}"),
+                    "from_b": self.model.NewIntVar(0, _rb, f"share_peer_b_to_{name}"),
                 }
                 node_vars["incoming_bools"][node_vars["source_a_id"]] = node_vars["input_vars"]["from_a"]
                 node_vars["incoming_bools"][node_vars["source_b_id"]] = node_vars["input_vars"]["from_b"]
@@ -336,7 +341,12 @@ class OrToolsSolver:
                         peer = self.peer_vars[parsed["idx"]]
                         r_src = peer["ratio_vars"][reagent_idx]
                         p_src = peer["p_value"]
-                        max_w = 2 # Peerからの供給は少量固定
+                        # ピア出力を供給先が使う量の上限。他ノードと同様に MAX_SHARING_VOLUME 基準。
+                        # （従来は 2 固定だったが、供給量を一律2に縛る根拠がないため統一）
+                        if Config.MAX_SHARING_VOLUME is not None and Config.MAX_SHARING_VOLUME > 0:
+                            max_w = Config.MAX_SHARING_VOLUME
+                        else:
+                            max_w = 2
                     else:
                         m, l, k = parsed["target_idx"], parsed["level"], parsed["node_idx"]
                         r_src = self.forest_vars[m][l][k]["ratio_vars"][reagent_idx]
@@ -435,9 +445,15 @@ class OrToolsSolver:
         is_active = or_peer_node["is_active_var"]
         w_a = or_peer_node["input_vars"]["from_a"]
         w_b = or_peer_node["input_vars"]["from_b"]
+        # 体積比 a:b に応じた入力消費量。異重きは a:b、等重きは 1:1。
+        if or_peer_node.get("is_hetero", False):
+            in_a = or_peer_node.get("ratio_a", 1)
+            in_b = or_peer_node.get("ratio_b", 1)
+        else:
+            in_a, in_b = 1, 1
         self.model.Add(total_input == w_a + w_b)
-        self.model.Add(w_a == 1).OnlyEnforceIf(is_active)
-        self.model.Add(w_b == 1).OnlyEnforceIf(is_active)
+        self.model.Add(w_a == in_a).OnlyEnforceIf(is_active)
+        self.model.Add(w_b == in_b).OnlyEnforceIf(is_active)
         self.model.Add(total_input == 0).OnlyEnforceIf(is_active.Not())
         self.model.Add(w_a == 0).OnlyEnforceIf(is_active.Not())
         self.model.Add(w_b == 0).OnlyEnforceIf(is_active.Not())

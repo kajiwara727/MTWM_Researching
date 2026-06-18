@@ -10,11 +10,11 @@ FACTOR_EXECUTION_MODE = "manual"
 OPTIMIZATION_MODE = "waste"
 
 # --- 出力設定 ---
-ENABLE_VISUALIZATION = True # True or False
+ENABLE_VISUALIZATION = False # True or False
 CONFIG_LOAD_FILE = "random_configs.json"
 
 # --- 制約条件 (ソルバーの挙動制御) ---
-MAX_CPU_WORKERS = 4
+MAX_CPU_WORKERS = 32
 MAX_TIME_PER_RUN_SECONDS = 120
 ABSOLUTE_GAP_LIMIT = 0.99
 MAX_SHARING_VOLUME = None
@@ -86,3 +86,11 @@ HETERO_MULTIPLE_ONLY = True
 # 異重きピア候補の最大数。None なら無制限。
 # 候補が多すぎてソルバーが重いときに制限する。
 HETERO_PEER_LIMIT = None
+
+# ★出力重み(p_new)の上限の決め方を切り替える。
+#   "min"  : p_new <= min(p_a, p_b)  [現状・従来の動作]
+#            小さい方の入力以下。軽い液滴のみを候補にする。
+#   "max"  : p_new <= max(p_a, p_b) かつ DFMM既存重み(中間+リーフ)に含まれるもののみ
+#            大きい方の入力以下で、材料になる(既存の)重みだけを候補にする。
+# 両者で結果がどう変わるか比較するために切り替え可能にしている。
+HETERO_PNEW_CAP_MODE = "min"

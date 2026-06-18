@@ -183,6 +183,22 @@ class MTWMProblem:
                         p_groups[p_val].append(node_id)
         return p_groups
 
+    def _existing_weights_with_leaf(self):
+        """DFMM初期構造に存在する重みの集合(中間ノード+リーフ、ルートは除く)。
+        HETERO_PNEW_CAP_MODE="max" のとき、出力重み候補をこの集合に限定する。
+        材料にならない(どこにも使われない)無駄な重みを作らないため。
+        """
+        weights = set()
+        for target_idx, tree in enumerate(self.forest):
+            for level, nodes in tree.items():
+                if level == 0:
+                    continue  # ルート(目標)は除外
+                for node_idx, _ in enumerate(nodes):
+                    p_val = self.p_value_maps[target_idx].get((level, node_idx))
+                    if p_val is not None:
+                        weights.add(p_val)  # 中間もリーフも含める(除外しない)
+        return weights
+
     def _achievable_pnews(self, p_a, p_b, t, max_cap, a=1, b=1):
         """
         [一般化・達成可能性 / lcmスケール版] 異重きペア (p_a,p_b) を
@@ -244,9 +260,18 @@ class MTWMProblem:
         from math import lcm
         import os
         L = lcm(p_a, p_b)
-        cap = min(max_mixer_size, p_a, p_b)
-        # 体積比リストを config から取得（"1:1" のみなら従来の等量混合）
+        # ★出力重み上限の方式を切り替え(HETERO_PNEW_CAP_MODE)
         from utils.config_loader import Config
+        cap_mode = getattr(Config, "HETERO_PNEW_CAP_MODE", "min")
+        if cap_mode == "max":
+            # 大きい方の入力以下。候補は後でDFMM既存重みに限定する。
+            cap = min(max_mixer_size, max(p_a, p_b))
+            allowed_weights = self._existing_weights_with_leaf()
+        else:
+            # 従来: 小さい方の入力以下(軽い液滴のみ)
+            cap = min(max_mixer_size, p_a, p_b)
+            allowed_weights = None  # 限定なし
+        # 体積比リストを config から取得（"1:1" のみなら従来の等量混合）
         ratios_env = getattr(Config, "HETERO_RATIOS", "1:1")
         ratio_list = []
         for tok in ratios_env.split(","):
@@ -260,6 +285,9 @@ class MTWMProblem:
             total = (a + b) * L
             achievable = self._achievable_pnews(p_a, p_b, self.num_reagents, cap, a, b)
             for p_new in sorted(achievable):
+                # ★max方式: 既存重みに含まれるp_newだけを採用(材料になるもののみ)
+                if allowed_weights is not None and p_new not in allowed_weights:
+                    continue
                 g = total // p_new
                 key = (a, b, p_new)
                 if key in seen:
@@ -413,7 +441,7 @@ class MTWMProblem:
             f_dst = self.targets_config[dst_target_idx]["factors"][dst_level]
 
             if src_target_idx == "R":
-                # Peerノードの場合のチェック (変更なし)
+                # Peerノードの場合のチェック
                 peer_node = self.peer_nodes[src_level]
                 p_src = peer_node["p_value"]
                 if peer_node.get("is_generic"):
@@ -423,6 +451,13 @@ class MTWMProblem:
                         peer_node["source_a_id"][1], peer_node["source_b_id"][1]
                     )
                 is_valid_level_connection = (l_src_eff > dst_level)
+                # ★循環防止: ピアの供給先が、そのピアの材料(source_a/source_b)
+                #   そのものであってはならない。さもないと
+                #   「ピア→材料→ピア」の循環(鶏と卵)になり物理的に作れない。
+                dst_id = (dst_target_idx, dst_level, dst_node_idx)
+                if dst_id == peer_node.get("source_a_id") or \
+                   dst_id == peer_node.get("source_b_id"):
+                    continue
             else:
                 # DFMMノードの場合のチェック (変更なし)
                 p_src = self.p_value_maps[src_target_idx][(src_level, src_node_idx)]

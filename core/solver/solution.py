@@ -53,12 +53,24 @@ class OrToolsSolutionModel:
                         results["total_waste"] += self._v(node_vars["waste_var"])
                     
                     node_name = create_dfmm_node_name(target_idx, level, node_idx)
+                    node_waste = self._v(node_vars["waste_var"]) if level != 0 else 0
+                    p_val = self.problem.p_value_maps[target_idx].get((level, node_idx))
+                    # 試薬投入(reagent_idx: 個数)
+                    reagents = {}
+                    for r_idx, r_var in enumerate(node_vars.get("reagent_vars", [])):
+                        rv = self._v(r_var)
+                        if rv > 0:
+                            reagents[r_idx] = rv
                     results["nodes_details"].append(
                         {
                             "target_id": target_idx,
                             "level": level,
                             "name": node_name,
                             "total_input": total_input,
+                            "p_value": p_val,
+                            "waste": node_waste,
+                            "is_root": (level == 0),
+                            "reagents": reagents,
                             "ratio_composition": [self._v(r) for r in node_vars["ratio_vars"]],
                             "mixing_str": self._generate_mixing_description(node_vars, target_idx),
                         }
@@ -92,16 +104,26 @@ class OrToolsSolutionModel:
                 name_a = create_dfmm_node_name(m_a, l_a, k_a)
                 m_b, l_b, k_b = z3_peer_node["source_b_id"]
                 name_b = create_dfmm_node_name(m_b, l_b, k_b)
-                
-                mixing_str = f"1 x {name_a} + 1 x {name_b}"
+                # 実際の消費量(体積比)を反映。異重きは from_a/from_b の値。
+                cnt_a = self._v(peer_node_vars["input_vars"]["from_a"])
+                cnt_b = self._v(peer_node_vars["input_vars"]["from_b"])
+                mixing_str = f"{cnt_a} x {name_a} + {cnt_b} x {name_b}"
                 avg_level = (l_a + l_b) / 2.0 - 0.5
             
+            peer_waste = self._v(peer_node_vars["waste_var"])
             results["nodes_details"].append(
                 {
                     "target_id": -1,
                     "level": avg_level,
                     "name": peer_node_vars["name"],
                     "total_input": total_input,
+                    "p_value": peer_node_vars.get("p_value"),
+                    "waste": peer_waste,
+                    "is_peer": True,
+                    "is_hetero": peer_node_vars.get("is_hetero", False),
+                    "ratio_a": peer_node_vars.get("ratio_a", 1),
+                    "ratio_b": peer_node_vars.get("ratio_b", 1),
+                    "reagents": {},
                     "ratio_composition": [self._v(r) for r in peer_node_vars["ratio_vars"]],
                     "mixing_str": mixing_str,
                 }
